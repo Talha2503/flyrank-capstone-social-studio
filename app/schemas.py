@@ -29,3 +29,19 @@ class VariantOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+from datetime import datetime
+
+
+class ScheduleRequest(BaseModel):
+    scheduled_at: datetime
+
+
+class SlotOut(BaseModel):
+    id: str
+    variant_id: str
+    scheduled_at: datetime
+    idempotency_key: str
+
+    class Config:
+        from_attributes = True
