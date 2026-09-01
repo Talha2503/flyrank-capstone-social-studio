@@ -119,3 +119,22 @@ def publish_slot(slot_id: str, db: Session = Depends(get_db)):
         "platform_message_id": attempt.platform_message_id,
         "publish_attempt_id": attempt.id,
     }
+
+@router.get("/publish-history")
+def publish_history(db: Session = Depends(get_db)):
+    attempts = db.query(models.PublishAttempt).order_by(models.PublishAttempt.attempted_at.desc()).all()
+    result = []
+    for a in attempts:
+        slot = db.query(models.Slot).filter(models.Slot.id == a.slot_id).first()
+        variant = db.query(models.Variant).filter(models.Variant.id == slot.variant_id).first() if slot else None
+        result.append({
+            "publish_attempt_id": a.id,
+            "slot_id": a.slot_id,
+            "variant_id": slot.variant_id if slot else None,
+            "platform": variant.platform if variant else None,
+            "status": a.status,
+            "platform_message_id": a.platform_message_id,
+            "error_message": a.error_message,
+            "attempted_at": a.attempted_at.isoformat() if a.attempted_at else None,
+        })
+    return result
