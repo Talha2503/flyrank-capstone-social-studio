@@ -1,6 +1,7 @@
 import hashlib
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from app.adapters.factory import get_publisher
 
 from app.database import get_db
 from app import models, schemas
@@ -69,3 +70,52 @@ def schedule_variant(variant_id: str, payload: schemas.ScheduleRequest, db: Sess
     db.commit()
     db.refresh(slot)
     return slot
+
+@router.post("/slots/{slot_id}/publish")
+def publish_slot(slot_id: str, db: Session = Depends(get_db)):
+    slot = db.query(models.Slot).filter(models.Slot.id == slot_id).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="slot not found")
+
+    variant = db.query(models.Variant).filter(models.Variant.id == slot.variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="variant not found")
+
+    # durable idempotency check: has this slot already been successfully published?
+    existing_success = (
+        db.query(models.PublishAttempt)
+        .filter(models.PublishAttempt.slot_id == slot.id, models.PublishAttempt.status == "success")
+        .first()
+    )
+    if existing_success:
+        return {
+            "status": "already_published",
+            "platform_message_id": existing_success.platform_message_id,
+            "publish_attempt_id": existing_success.id,
+        }
+
+    publisher = get_publisher(variant.platform)
+
+    try:
+        result = publisher.publish(content=variant.content, idempotency_key=slot.idempotency_key)
+    except Exception as e:
+        attempt = models.PublishAttempt(slot_id=slot.id, status="failed", error_message=str(e))
+        db.add(attempt)
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"publish failed: {e}")
+
+    attempt = models.PublishAttempt(
+        slot_id=slot.id,
+        status="success",
+        platform_message_id=result["platform_message_id"],
+    )
+    db.add(attempt)
+    variant.status = "published"
+    db.commit()
+    db.refresh(attempt)
+
+    return {
+        "status": "published",
+        "platform_message_id": attempt.platform_message_id,
+        "publish_attempt_id": attempt.id,
+    }
